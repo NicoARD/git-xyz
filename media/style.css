@@ -117,8 +117,10 @@ body.side-hidden { --side-w: 0px; }
 #sideResize { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
 #sideResize:hover, #sideResize.dragging { background: var(--b-accent); }
 .panel { display: flex; flex-direction: column; min-height: 0; background: var(--b-header); border-radius: 0 0 6px 6px; }
-#itemPanel { flex: 0 0 var(--item-h, 55%); }
-#actionsPanel { flex: 1 1 0; }
+#itemPanel { flex: 1 1 0; }
+#actionsPanel { flex: 0 1 auto; max-height: 45%; }
+#sidebar.sized #itemPanel { flex: 0 0 var(--item-h); }
+#sidebar.sized #actionsPanel { flex: 1 1 0; max-height: none; }
 .panel.collapsed { flex: 0 0 auto !important; }
 #sidebar:has(#actionsPanel.collapsed) #itemPanel { flex: 1 1 auto; }
 #sideSplit { flex-shrink: 0; height: 4px; margin: -2px 0; border-radius: 2px; cursor: ns-resize; }
@@ -183,6 +185,17 @@ body.fly #flyHud { display: flex; }
 }
 #crosshair.hit { transform: scale(1.35); border-color: #ffc400; }
 #crosshair.hit::after { background: #ffc400; }
+/* covers the 3D view only, so the UI stays usable while a checkout runs in flight mode */
+#fade {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.9s ease-out;
+}
+#fade.on { opacity: 1; transition: opacity 0.5s ease-in; }
 #flyHud {
   left: 50%;
   bottom: 32px;
@@ -266,6 +279,8 @@ body.fly #flyHud { display: flex; }
 #viewPanel .prop > span { width: 100px; flex-shrink: 0; text-align: right; color: var(--b-text-dim); }
 #viewPanel .prop > select, #viewPanel .prop > input { flex: 1; min-width: 0; }
 #viewPanel .check { display: flex; align-items: center; gap: 6px; padding-left: 108px; cursor: pointer; }
+body:not(.fly) #viewPanel .fly-only { display: none; }
+body:not(.layout-galaxy) #viewPanel .galaxy-only { display: none; }
 
 select {
   font: inherit;

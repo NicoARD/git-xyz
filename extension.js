@@ -14,6 +14,7 @@ let currentRoot;
 let extContext;
 let repoListener;
 let maxCount = PAGE_SIZE;
+let checkoutDone = false; // a checkout finished; the next refresh tells the webview
 let statsCache = new Map(); // hash -> { changes, files, folder }; commits are immutable so this never goes stale
 
 function activate(context) {
@@ -146,6 +147,10 @@ async function loadStats(root, hashes) {
 async function refresh() {
   for (const t of toolPanels.values()) t.refresh();
   if (!panel) return;
+  // only a refresh that starts after the checkout finished may report it as done
+  const announce = checkoutDone;
+  checkoutDone = false;
+  const done = () => announce && panel?.webview.postMessage({ type: 'checkout', phase: 'done' });
   const resolved = await resolveRepo();
   if (!resolved) {
     panel.webview.postMessage({ type: 'error', message: 'No git repository found in the workspace.' });
@@ -164,6 +169,7 @@ async function refresh() {
   try {
     graph = await loadGraph(resolved.root);
     panel.webview.postMessage({ type: 'graph', graph });
+    done();
   } catch (e) {
     panel.webview.postMessage({ type: 'error', message: e.message });
     return;
@@ -346,6 +352,7 @@ async function runAction(msg) {
   }
 
   try {
+    if (args[0] === 'checkout') panel?.webview.postMessage({ type: 'checkout', phase: 'start' });
     await git(root, args);
     vscode.window.setStatusBarMessage(`GitXYZ: git ${args.join(' ')}`, 4000);
   } catch (e) {
@@ -356,6 +363,7 @@ async function runAction(msg) {
       vscode.window.showErrorMessage(`git ${args[0]} failed: ${e.message}`);
     }
   }
+  if (args[0] === 'checkout') checkoutDone = true;
   refresh();
 }
 
@@ -769,8 +777,10 @@ function getHtml(webview, extUri) {
         <select id="layout">
           <option value="map" selected>Map (flat lanes)</option>
           <option value="spiral">Spiral (3D)</option>
+          <option value="galaxy">Galaxy</option>
         </select>
       </div>
+      <div class="prop galaxy-only" title="Galaxy layout: how many of the newest commits to show"><span id="galaxyCountLabel">Commits</span><input type="range" id="galaxyCount" min="20" max="2000" step="10"></div>
       <div class="prop"><span>Branch Spacing</span><input type="range" id="branchSpacing" min="2" max="12" step="0.5"></div>
       <div class="prop" title="Map layout: how far branches are pushed in and out of the plane"><span>Depth Variation</span><input type="range" id="depthVariation" min="0" max="12" step="0.5"></div>
       <label class="check" title="Branches cluster organically; time stays on the X axis"><input type="checkbox" id="organic"> Organic Layout</label>
@@ -780,6 +790,8 @@ function getHtml(webview, extUri) {
       <label class="check" title="Show one label per commit with a count of the other refs"><input type="checkbox" id="groupRefLabels" checked> One Label per Commit</label>
       <label class="check" title="Subject, author, age and hash next to each commit when zoomed in"><input type="checkbox" id="details" checked> Commit Details</label>
       <label class="check" title="Hide labels that overlap more important ones on screen"><input type="checkbox" id="declutter" checked> Hide Overlapping Labels</label>
+      <div class="section fly-only">Flight Mode</div>
+      <label class="check fly-only" title="Show a small spaceship with a trail (T)"><input type="checkbox" id="showShip"> Show Spaceship</label>
     </div>
   </div>
   </div>
@@ -812,7 +824,8 @@ function getHtml(webview, extUri) {
 <button id="eyeBtn" class="icon-btn" title="Hide / show the interface (H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.6-4.8 7-4.8S15 8 15 8s-2.6 4.8-7 4.8S1 8 1 8z"/><circle cx="8" cy="8" r="2.1" fill="currentColor"/><path class="slash" d="M2.5 13.5l11-11"/></svg></button>
 <div id="legend" class="hidden"></div>
 <div id="crosshair"></div>
-<div id="flyHud"><b>Keyboard navigation</b><span><kbd>W</kbd><kbd>S</kbd> Move</span><span><kbd>A</kbd><kbd>D</kbd> Roll</span><span><kbd>↑</kbd><kbd>↓</kbd> Pitch</span><span><kbd>←</kbd><kbd>→</kbd> Turn</span><span><kbd>Mouse</kbd> Look</span><span><kbd>Hold click</kbd> Carry commit</span><span><kbd>Shift</kbd> Fast</span><span><kbd>Alt</kbd> Fine</span><span><kbd>Wheel</kbd> Speed <span id="flySpeed"></span></span><span><kbd>Space</kbd> Select</span><span><kbd>Space ×2</kbd> Menu</span><span><kbd>Esc</kbd> Exit</span></div>
+<div id="fade"></div>
+<div id="flyHud"><b>Keyboard navigation</b><span><kbd>W</kbd><kbd>S</kbd> Move</span><span><kbd>A</kbd><kbd>D</kbd> Roll</span><span><kbd>↑</kbd><kbd>↓</kbd> Pitch</span><span><kbd>←</kbd><kbd>→</kbd> Turn</span><span><kbd>Mouse</kbd> Look</span><span><kbd>Hold click</kbd> Carry commit</span><span><kbd>Shift</kbd> Fast</span><span><kbd>Alt</kbd> Fine</span><span><kbd>T</kbd> Ship <span id="shipState"></span></span><span><kbd>Wheel</kbd> Speed <span id="flySpeed"></span></span><span><kbd>Space</kbd> Select</span><span><kbd>Space ×2</kbd> Menu</span><span><kbd>Esc</kbd> Exit</span></div>
 <canvas id="gizmo" title="Click an axis to view from that side"></canvas>
 <div id="pins" class="hidden"></div>
 <div id="hint"><span><b>Scroll</b> Zoom</span><span><b>LMB drag</b> Pan / move node</span><span><b>RMB drag</b> Tilt &amp; orbit</span><span><b>Dbl-click</b> Commit view</span><span><b>RMB</b> Actions</span><span><b>P</b> Pin branch</span><span><b>N</b> Sidebar</span><span><b>1</b>/<b>2</b> Focus Item/Actions</span><span><b>F</b> Keyboard Nav</span><span><b>H</b> Hide UI</span><span><b>Esc</b> Deselect</span></div>

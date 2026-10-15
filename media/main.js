@@ -33,6 +33,8 @@ const DETAIL_MIN_ROW_PX = 20; // commit details appear once rows are at least th
 const DETAIL_CACHE = 500;
 const MAP_LANE = 0.45; // map layout: lane width as a fraction of branch spacing
 const MAP_VIEW = new THREE.Vector3(0, 0, 55);
+const GALAXY_VIEW = new THREE.Vector3(0, -130, 170); // tilted so the disc reads as a galaxy
+const GALAXY_RENDER_DISTANCE = 1200; // the galaxy is far wider than the other layouts
 
 // --- scene setup ---
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -84,6 +86,7 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
 let state = null; // { graph, positions, commitMesh, sprites, byHash }
+let fullGraph = null; // everything loaded; the galaxy layout only shows the newest part
 let selectedHash = null;
 let hoveredIndex = -1;
 let hoveredKey = -1;
@@ -104,9 +107,12 @@ const settings = {
   sizeByChanges: true,
   organic: false,
   collapse: true,
+  showShip: false,
+  galaxyCount: 200,
   branchSpacing: 6,
   renderDistance: 400
 };
+const isGalaxy = () => settings.layout === 'galaxy';
 let highlightUntil = 0;
 let boundsDirty = false;
 let chainsDirty = false;
@@ -175,6 +181,33 @@ function lanePosition(lane) {
   const r = settings.branchSpacing * Math.sqrt(lane);
   const a = lane * GOLDEN_ANGLE;
   return [Math.cos(a) * r * LANE_STRETCH, Math.sin(a) * r]; // [x, z]
+}
+
+// Galaxy: the oldest commit sits in the core and history winds outward along a spiral arm, newest on the rim.
+// Branches run as parallel arms beside the main one. Branch Spacing scales the whole thing.
+const GALAXY_CORE = 20;
+const GALAXY_STEP = 14; // arc length between consecutive commits
+const GALAXY_ARM = 100; // distance between turns of the spiral
+const GALAXY_LANE = 5; // sideways offset per branch lane
+function galaxyPositions(commits, laneOf) {
+  const k = settings.branchSpacing / 6;
+  const b = (GALAXY_ARM * k) / (2 * Math.PI);
+  const n = commits.length;
+  const out = new Array(n);
+  let theta = 0;
+  for (let t = 0; t < n; t++) {
+    const i = n - 1 - t; // commits arrive newest first
+    const r = GALAXY_CORE * k + b * theta;
+    const lane = laneOf[i];
+    const slot = Math.ceil(lane / 2);
+    // up to 8 lanes per side of the arm, further ones are separated in depth instead
+    const off = lane === 0 ? 0 : (lane % 2 ? 1 : -1) * (slot % 8) * GALAXY_LANE * k;
+    const z = lane === 0 ? 0 : Math.sin(lane * GOLDEN_ANGLE * 3.7) * settings.depthVariation * 2 + Math.floor(slot / 8) * 10;
+    const rr = Math.max(r + off, 1);
+    out[i] = new THREE.Vector3(Math.cos(theta) * rr, Math.sin(theta) * rr, z);
+    theta += (GALAXY_STEP * k) / Math.max(r, GALAXY_STEP * k);
+  }
+  return out;
 }
 
 function makeHaloTexture() {
@@ -380,23 +413,31 @@ function clearGraph() {
   graphGroup.clear();
 }
 
-function buildGraph(graph) {
-  if (state && settings.organic) state.graph.commits.forEach((c, i) => simPositions.set(c.hash, state.positions[i].clone()));
+function buildGraph(full) {
+  fullGraph = full;
+  const galaxy = isGalaxy();
+  const graph = galaxy ? { ...full, commits: full.commits.slice(0, settings.galaxyCount) } : full;
+  if (state && state.layout === settings.layout && settings.organic && !galaxy) {
+    state.graph.commits.forEach((c, i) => simPositions.set(c.hash, state.positions[i].clone()));
+  }
   clearGraph();
   simVel = null;
   const { commits } = graph;
   const n = commits.length;
   const laneOf = assignLanes(commits);
   const byHash = new Map(commits.map((c, i) => [c.hash, i]));
-  const anchors = laneOf.map(lanePosition);
+  let anchors = laneOf.map(lanePosition);
   const ts = commitTimes(commits);
+  const galaxyPos = galaxy ? galaxyPositions(commits, laneOf) : null;
   const positions = commits.map((c, i) => {
     const moved = movedPositions.get(c.hash);
     if (moved) return moved.clone();
+    if (galaxyPos) return galaxyPos[i];
     const sim = settings.organic && simPositions.get(c.hash);
     const [x, z] = sim ? [sim.x, sim.z] : anchors[i];
     return new THREE.Vector3(x, ts[i], z); // newest at y=0, older history extends downward
   });
+  if (galaxy) anchors = positions.map(p => [p.x, p.z]);
   const sizes = Float32Array.from(commits, commitSize);
 
   // commits
@@ -533,7 +574,7 @@ function buildGraph(graph) {
     const nodes = [i];
     for (let p = firstParent[i]; p >= 0 && !seen[p] && linear(p) && laneOf[p] === laneOf[i]; p = firstParent[p]) nodes.push(p);
     nodes.forEach(k => { seen[k] = 1; });
-    if (nodes.length >= LOD_MIN_CHAIN) chains.push({ nodes, label: null, collapsed: false });
+    if (!galaxy && nodes.length >= LOD_MIN_CHAIN) chains.push({ nodes, label: null, collapsed: false });
   }
   const chainMesh = new THREE.InstancedMesh(cylGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.8 }), Math.max(chains.length, 1));
   chainMesh.count = chains.length;
@@ -554,10 +595,10 @@ function buildGraph(graph) {
   graphGroup.add(selMarker);
 
   state = {
-    graph, positions, sizes, anchors, hidden: new Uint8Array(n), commitMesh, sprites, nodeSprites, byHash, laneOf,
+    graph, layout: settings.layout, positions, sizes, anchors, hidden: new Uint8Array(n), commitMesh, sprites, nodeSprites, byHash, laneOf,
     details: new Array(n).fill(null), detailCount: 0,
     headIdx, headRing, selMarker, edges, nodeEdges, edgeGeo, tubes, tubeOfEdge, tubeGeo, nodeHalo, chains, chainMesh, nodeColors: [],
-    timeTicks: buildTimeTicks(commits, ts),
+    timeTicks: galaxy ? [] : buildTimeTicks(commits, ts),
     branchOf: computeBranchOf(commits, byHash)
   };
   for (let i = 0; i < n; i++) syncNode(i);
@@ -566,6 +607,11 @@ function buildGraph(graph) {
   applyColors();
   markMoved();
   if (settings.organic) startSim(simPositions.size ? 0.3 : 1);
+  // asked for more commits than are loaded: fetch further pages until there are enough
+  if (galaxy && settings.galaxyCount > full.commits.length && full.hasMore && !loadingMore) {
+    loadingMore = true;
+    vscode.postMessage({ type: 'loadMore' });
+  }
 }
 
 const bezier = new THREE.QuadraticBezierCurve3();
@@ -584,6 +630,7 @@ function edgeCurve(k, curve) {
   curve.v2.copy(b);
   if (pi === 0) curve.v1.set(a.x, b.y, a.z);
   else curve.v1.set(b.x, a.y, b.z);
+  if (state.layout === 'galaxy') curve.v1.addVectors(a, b).multiplyScalar(0.5);
   return curve;
 }
 
@@ -761,7 +808,7 @@ function updateLod() {
 }
 
 function maybeLoadMore() {
-  if (!state.graph.hasMore || loadingMore) return;
+  if (isGalaxy() || !state.graph.hasMore || loadingMore) return;
   let oldestY = 0;
   for (const p of state.positions) if (p.y < oldestY) oldestY = p.y;
   if (Math.min(camera.position.y, controls.target.y) < oldestY + LOAD_MORE_MARGIN) {
@@ -773,7 +820,7 @@ function maybeLoadMore() {
 
 // --- organic layout: force simulation on X/Z only, Y stays time ---
 function startSim(alpha) {
-  if (!settings.organic || !state) return;
+  if (!settings.organic || isGalaxy() || !state) return;
   simAlpha = Math.max(simAlpha, alpha);
   invalidate();
 }
@@ -1140,18 +1187,19 @@ function renderLegend(entries) {
 }
 
 // --- camera ---
-function focusOn(pos, keepOffset) {
-  exitFly();
+function focusOn(pos, keepOffset, keepFly) {
+  if (!keepFly) exitFly();
   const offset = keepOffset ? camera.position.clone().sub(controls.target)
-    : settings.layout === 'map' ? MAP_VIEW.clone() : new THREE.Vector3(-4, 4, 16);
+    : settings.layout === 'map' ? MAP_VIEW.clone() : isGalaxy() ? GALAXY_VIEW.clone() : new THREE.Vector3(-4, 4, 16);
   controls.target.copy(pos);
   camera.position.copy(pos).add(offset);
   controls.update();
   invalidate();
 }
 
-function resetView() {
+function resetView(keepFly) {
   if (!state || !state.positions.length) return;
+  if (isGalaxy()) return focusOn(new THREE.Vector3(), false, keepFly);
   const idx = state.headIdx >= 0 ? state.headIdx : 0;
   const pos = state.positions[idx].clone();
   if (settings.layout === 'map') {
@@ -1160,7 +1208,7 @@ function resetView() {
     pos.x += visH * camera.aspect * 0.24;
     pos.y -= visH * 0.15;
   }
-  focusOn(pos, false);
+  focusOn(pos, false, keepFly);
 }
 
 // --- picking ---
@@ -1782,6 +1830,7 @@ const FOCUSABLE = 'button:not(:disabled), [tabindex="0"]';
 
 function updateFlyHud() {
   document.getElementById('flySpeed').textContent = Math.round(flySpeed);
+  document.getElementById('shipState').textContent = settings.showShip ? 'on' : 'off';
 }
 
 function flyCenter() {
@@ -1839,6 +1888,7 @@ function exitFly() {
   document.body.classList.remove('fly');
   flyBtn.classList.remove('active');
   crosshairEl.classList.remove('hit');
+  stepShip(0);
   if (document.pointerLockElement) document.exitPointerLock();
   camera.updateMatrixWorld();
   camera.getWorldDirection(tmpVec);
@@ -1876,6 +1926,177 @@ function flyAction(menu) {
   menuEl.querySelector('.menu-item:not(:disabled)')?.focus();
 }
 
+// --- spaceship: a shaded ship held in front of the camera with engine flames, flight mode only ---
+const SHIP_OFFSET = new THREE.Vector3(0, -0.8, -3.2);
+const SHIP_ENGINES = [new THREE.Vector3(-0.07, 0, 0.42), new THREE.Vector3(0.07, 0, 0.42)];
+const SHIP_SCALE = 0.22;
+const SHIP_COLOR = new THREE.Color(0x007acc); // VS Code blue
+const BASE_FOV = 55;
+const FOV_KICK = 10; // degrees added at full boost
+const FLIP_MS = 1100;
+// drawn in a second pass over the graph, with its own lights, so nothing can cover it
+const shipScene = new THREE.Scene();
+const shipRig = new THREE.Group(); // copies the camera each frame
+const ship = new THREE.Group();
+ship.position.copy(SHIP_OFFSET);
+ship.scale.setScalar(SHIP_SCALE);
+shipRig.add(ship);
+shipRig.visible = false;
+shipScene.add(shipRig);
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.6);
+keyLight.position.set(-2, 3, 1);
+const fillLight = new THREE.DirectionalLight(0x4a8cff, 1.0);
+fillLight.position.set(3, -1, 2);
+for (const l of [new THREE.AmbientLight(0xffffff, 0.7), keyLight, fillLight]) {
+  shipRig.add(l);
+  if (l.target) {
+    l.target.position.copy(SHIP_OFFSET);
+    shipRig.add(l.target);
+  }
+}
+const shipMaterial = new THREE.MeshPhongMaterial({ color: SHIP_COLOR, flatShading: true, shininess: 70, specular: 0x88aadd, side: THREE.DoubleSide });
+
+function shipSolid(verts, faces) {
+  const pos = [];
+  for (const f of faces) for (const v of f) pos.push(...verts[v]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  ship.add(new THREE.Mesh(geo, shipMaterial));
+}
+// nose points down -Z, the way the camera looks; flat shading makes the facets catch the light
+shipSolid(
+  [[0, 0, -0.7], [0, 0.14, 0.05], [0.13, -0.02, 0.05], [0, -0.1, 0.05], [-0.13, -0.02, 0.05], [0, 0.1, 0.42], [0.09, 0, 0.42], [0, -0.07, 0.42], [-0.09, 0, 0.42]],
+  [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 4, 8], [3, 8, 7], [4, 1, 5], [4, 5, 8], [5, 6, 7], [5, 7, 8]]
+);
+const wingVerts = [[0.1, -0.01, -0.15], [0.1, -0.01, 0.38], [0.78, -0.03, 0.48], [0.16, 0.04, 0.12], [0.16, -0.06, 0.12]];
+const wingFaces = [[0, 3, 2], [1, 2, 3], [0, 2, 4], [1, 4, 2], [0, 1, 3], [0, 4, 1]];
+shipSolid(wingVerts, wingFaces);
+shipSolid(wingVerts.map(([x, y, z]) => [-x, y, z]), wingFaces);
+shipSolid(
+  [[0, 0.12, 0.12], [0, 0.4, 0.5], [0, 0.1, 0.5], [0.025, 0.1, 0.35], [-0.025, 0.1, 0.35]],
+  [[0, 3, 1], [0, 1, 4], [1, 3, 2], [1, 2, 4], [0, 2, 3], [0, 4, 2]]
+);
+// engine flames point backwards (+Z) and are stretched by thrust
+const flameGeo = new THREE.ConeGeometry(0.04, 1, 8).rotateX(Math.PI / 2).translate(0, 0, 0.5);
+const flameMat = new THREE.MeshBasicMaterial({ color: 0x4db5ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+const flames = SHIP_ENGINES.map(p => {
+  const f = new THREE.Mesh(flameGeo, flameMat);
+  f.position.copy(p);
+  ship.add(f);
+  return f;
+});
+const shipDyn = { yaw: 0, pitch: 0, roll: 0, thrust: 0, t: 0 }; // smoothed motion that drives the wobble
+let shipShown = false;
+let shipFlip = 0; // start time of the flip in progress, 0 when idle
+
+function stepShip(dt, input) {
+  const show = flyMode && settings.showShip;
+  if (show !== shipShown) {
+    shipShown = show;
+    shipRig.visible = show;
+    if (!show) {
+      Object.assign(shipDyn, { yaw: 0, pitch: 0, roll: 0, thrust: 0 });
+      camera.fov = BASE_FOV;
+      camera.updateProjectionMatrix();
+    }
+    invalidate();
+  }
+  if (!show) return;
+
+  // smooth the camera's turn rates and thrust, then let the ship lean into them
+  const d = Math.max(dt, 1e-3);
+  const k = 1 - Math.exp(-dt * 7);
+  shipDyn.yaw += ((input?.yaw ?? 0) / d - shipDyn.yaw) * k;
+  shipDyn.pitch += ((input?.pitch ?? 0) / d - shipDyn.pitch) * k;
+  shipDyn.roll += ((input?.rollBy ?? 0) / d - shipDyn.roll) * k;
+  shipDyn.thrust += ((input?.thrust ?? 0) - shipDyn.thrust) * (1 - Math.exp(-dt * 3));
+  shipDyn.t += dt;
+  const { yaw, pitch, roll, thrust, t } = shipDyn;
+  const clamp = THREE.MathUtils.clamp;
+  const boost = clamp(Math.max(thrust, 0) / FLY_FAST, 0, 1);
+  const amp = 1 + Math.abs(thrust) * 0.6; // sway grows with speed
+  const shake = boost * boost * 0.002;
+  let flipAngle = 0;
+  let flipLift = 0;
+  if (shipFlip) {
+    const u = (performance.now() - shipFlip) / FLIP_MS;
+    if (u >= 1) shipFlip = 0;
+    else {
+      flipAngle = u * u * (3 - 2 * u) * Math.PI * 2;
+      flipLift = Math.sin(u * Math.PI);
+    }
+  }
+  ship.position.set(
+    SHIP_OFFSET.x - clamp(yaw * 0.1, -0.7, 0.7) + Math.sin(t * 1.3) * 0.03 * amp + (Math.sin(t * 31) + Math.sin(t * 23)) * shake,
+    SHIP_OFFSET.y + clamp(pitch * 0.08, -0.5, 0.5) + Math.sin(t * 2.1) * 0.025 * amp + (Math.sin(t * 29) + Math.sin(t * 19)) * shake + flipLift * 0.2,
+    SHIP_OFFSET.z - Math.max(thrust, 0) * 0.06 + Math.min(thrust, 0) * 0.04 - flipLift * 0.5
+  );
+  ship.rotation.set(
+    clamp(pitch * 0.18, -0.5, 0.5) + Math.sin(t * 2.3 + 1) * 0.02 * amp + flipAngle,
+    clamp(yaw * 0.12, -0.5, 0.5),
+    clamp(yaw * 0.3 - roll * 0.15, -0.9, 0.9) + Math.sin(t * 1.7) * 0.035 * amp,
+    'YXZ'
+  );
+  flames.forEach((f, i) => {
+    const len = 0.25 + Math.max(thrust, 0) * 0.9 - Math.min(thrust, 0) * 0.1;
+    f.scale.set(1 + boost * 0.3, 1 + boost * 0.3, len * (0.94 + 0.06 * Math.sin(t * 17 + i * 2)));
+  });
+  // wider view at speed
+  const fov = BASE_FOV + FOV_KICK * boost;
+  if (Math.abs(camera.fov - fov) > 0.01) {
+    camera.fov += (fov - camera.fov) * k;
+    camera.updateProjectionMatrix();
+  }
+  shipRig.position.copy(camera.position);
+  shipRig.quaternion.copy(camera.quaternion);
+  shipRig.updateMatrixWorld(true);
+  invalidate(); // the sway means every frame changes
+}
+
+function renderShip() {
+  if (!shipShown) return;
+  shipRig.position.copy(camera.position);
+  shipRig.quaternion.copy(camera.quaternion);
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  renderer.render(shipScene, camera);
+  renderer.autoClear = true;
+}
+
+function toggleShip() {
+  settings.showShip = !settings.showShip;
+  document.getElementById('showShip').checked = settings.showShip;
+  updateFlyHud();
+  persist();
+}
+
+// Checking out in flight mode: the view fades to black until the new graph is in, then resets and the ship flips.
+const FADE_MIN_MS = 650; // the fade to black has to finish before the view jumps
+const fadeEl = document.getElementById('fade');
+let checkoutFade = null; // { t0, timer, ending }
+
+function beginCheckoutFade() {
+  if (!flyMode || checkoutFade) return;
+  checkoutFade = { t0: performance.now(), timer: setTimeout(endCheckoutFade, 20000) }; // never leave the screen black
+  fadeEl.classList.add('on');
+}
+
+function endCheckoutFade() {
+  const f = checkoutFade;
+  if (!f || f.ending) return;
+  f.ending = true;
+  clearTimeout(f.timer);
+  setTimeout(() => {
+    checkoutFade = null;
+    if (flyMode) {
+      resetView(true);
+      shipFlip = performance.now();
+    }
+    fadeEl.classList.remove('on');
+    invalidate();
+  }, Math.max(0, FADE_MIN_MS - (performance.now() - f.t0)));
+}
+
 function stepFly(dt) {
   if (!flyMode) return;
   const down = c => (flyKeys.has(c) ? 1 : 0);
@@ -1897,12 +2118,13 @@ function stepFly(dt) {
     flyHoverDirty = true;
   }
   camera.getWorldDirection(tmpVec);
+  const boost = flyKeys.has('ShiftLeft') || flyKeys.has('ShiftRight') ? FLY_FAST : 1;
   if (move) {
-    const fast = flyKeys.has('ShiftLeft') || flyKeys.has('ShiftRight') ? FLY_FAST : 1;
-    camera.position.addScaledVector(tmpVec, move * flySpeed * fast * dt);
+    camera.position.addScaledVector(tmpVec, move * flySpeed * boost * dt);
     flyHoverDirty = true;
   }
   controls.target.copy(camera.position).addScaledVector(tmpVec, flyOrbitDist);
+  stepShip(dt, { yaw, pitch, rollBy, thrust: move * boost });
   if (drag && flyPress) {
     // the grabbed commit stays where it was in the view, so it follows the crosshair as the ship turns and moves
     camera.updateMatrixWorld();
@@ -1959,6 +2181,9 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     flyKeys.add(e.code);
     flyRelock();
+  } else if (e.code === 'KeyT') {
+    e.preventDefault();
+    if (!e.repeat) toggleShip();
   } else if (e.code === 'Space') {
     e.preventDefault();
     if (e.repeat) return;
@@ -2015,7 +2240,7 @@ window.addEventListener('resize', () => {
 
 function rebuild() {
   if (!state) return;
-  buildGraph(state.graph);
+  buildGraph(fullGraph);
   const idx = selectedHash ? state.byHash.get(selectedHash) : undefined;
   select(idx ?? null);
 }
@@ -2028,12 +2253,14 @@ function resetLayout() {
 
 // --- interface layout: sidebar width, collapsed panels, hidden UI ---
 const SIDE_MIN = 220;
-const ui = { sideW: 320, sideHidden: false, uiHidden: false, collapsed: [], itemFrac: 0.55, tagActionsOpen: false };
+const ui = { sideW: 320, sideHidden: false, uiHidden: false, collapsed: [], itemFrac: null, tagActionsOpen: false };
 const sidebar = document.getElementById('sidebar');
 
 function applyUi() {
   document.documentElement.style.setProperty('--side-w', ui.sideW + 'px');
-  sidebar.style.setProperty('--item-h', (ui.itemFrac * 100).toFixed(1) + '%');
+  // null = Item takes the free space and Actions fits its content; a number = the user dragged the split
+  sidebar.classList.toggle('sized', ui.itemFrac != null);
+  if (ui.itemFrac != null) sidebar.style.setProperty('--item-h', (ui.itemFrac * 100).toFixed(1) + '%');
   document.body.classList.toggle('side-hidden', ui.sideHidden);
   document.body.classList.toggle('ui-hidden', ui.uiHidden);
   document.querySelectorAll('#sidebar .panel').forEach(p => p.classList.toggle('collapsed', ui.collapsed.includes(p.id)));
@@ -2073,6 +2300,7 @@ sideSplit.addEventListener('pointerup', () => {
   sideSplit.classList.remove('dragging');
   persist();
 });
+sideSplit.addEventListener('dblclick', () => setUi({ itemFrac: null }));
 
 const sideResize = document.getElementById('sideResize');
 sideResize.addEventListener('pointerdown', e => {
@@ -2120,16 +2348,44 @@ document.getElementById('dimLabels').onchange = e => {
   settings.labelsDimmed = e.target.checked;
   invalidate();
 };
+document.getElementById('showShip').onchange = e => {
+  settings.showShip = e.target.checked;
+  updateFlyHud();
+  invalidate();
+};
 document.getElementById('details').onchange = e => {
   settings.details = e.target.checked;
   invalidate();
 };
+function applyLayoutClass() {
+  document.body.classList.toggle('layout-galaxy', isGalaxy());
+}
 document.getElementById('layout').onchange = e => {
+  const was = settings.layout;
   settings.layout = e.target.value;
+  // dragged-by-hand positions belong to the layout they were made in
+  if (was === 'galaxy' || isGalaxy()) movedPositions.clear();
+  if (isGalaxy() && settings.renderDistance < GALAXY_RENDER_DISTANCE) {
+    renderDistEl.value = GALAXY_RENDER_DISTANCE;
+    applyRenderDistance();
+  }
+  applyLayoutClass();
   simPositions.clear();
   rebuild();
   resetView();
 };
+const galaxyCountEl = document.getElementById('galaxyCount');
+const showGalaxyCount = () => {
+  document.getElementById('galaxyCountLabel').textContent = `Commits (${galaxyCountEl.value})`;
+};
+galaxyCountEl.value = settings.galaxyCount;
+galaxyCountEl.oninput = showGalaxyCount;
+galaxyCountEl.onchange = () => {
+  settings.galaxyCount = Number(galaxyCountEl.value);
+  showGalaxyCount();
+  rebuild();
+};
+showGalaxyCount();
 document.getElementById('declutter').onchange = e => {
   settings.declutter = e.target.checked;
   invalidate();
@@ -2196,14 +2452,19 @@ function restore(data) {
   Object.assign(cameraByRoot, data.cameras);
   Object.assign(filtersByRoot, data.filters);
   Object.assign(ui, data.ui);
+  if (ui.itemFrac === 0.55) ui.itemFrac = null; // the old fixed default, not a user choice
   applyUi();
   const set = (id, prop, value) => { document.getElementById(id)[prop] = value; };
   set('colorMode', 'value', settings.colorMode);
   set('sizeByChanges', 'checked', settings.sizeByChanges);
   set('collapseChains', 'checked', settings.collapse);
   set('layout', 'value', settings.layout);
+  galaxyCountEl.value = settings.galaxyCount;
+  showGalaxyCount();
+  applyLayoutClass();
   set('organic', 'checked', settings.organic);
   set('dimLabels', 'checked', settings.labelsDimmed);
+  set('showShip', 'checked', settings.showShip);
   set('details', 'checked', settings.details);
   set('declutter', 'checked', settings.declutter);
   set('groupRefLabels', 'checked', settings.groupRefLabels);
@@ -2426,12 +2687,16 @@ window.addEventListener('message', ({ data }) => {
     restore(data.data || {});
   } else if (data.type === 'gitStatus') {
     renderGitStatus(data);
+  } else if (data.type === 'checkout') {
+    if (data.phase === 'start') beginCheckoutFade();
+    else endCheckoutFade();
   } else if (data.type === 'commitDetails') {
     if (data.error) commitDetailCache.delete(data.hash);
     else commitDetailCache.set(data.hash, { body: data.body, files: data.files });
     if (state) renderSide();
   } else if (data.type === 'error') {
     loadingMore = false;
+    endCheckoutFade();
     document.getElementById('repoName').textContent = data.message;
   }
 });
@@ -2467,8 +2732,10 @@ function animate() {
     maybeLoadMore();
   }
   grid.position.set(Math.round(controls.target.x / 5) * 5, Math.round(controls.target.y / 5) * 5, 0);
+  xAxis.visible = !isGalaxy();
   xAxis.position.set(timeAxisX, grid.position.y, 0);
   renderer.render(scene, camera);
+  renderShip();
   drawGizmo();
 }
 
