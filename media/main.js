@@ -87,6 +87,8 @@ let state = null; // { graph, positions, commitMesh, sprites, byHash }
 let selectedHash = null;
 let hoveredIndex = -1;
 let hoveredKey = -1;
+let flyMode = false; // keyboard navigation mode
+let flyMenu = false; // a context menu is open in fly mode, so the pointer is released on purpose
 let loadedRoot = null;
 const movedPositions = new Map(); // hash -> Vector3, survives refreshes
 const simPositions = new Map(); // hash -> Vector3 from the organic layout, survives refreshes
@@ -1139,6 +1141,7 @@ function renderLegend(entries) {
 
 // --- camera ---
 function focusOn(pos, keepOffset) {
+  exitFly();
   const offset = keepOffset ? camera.position.clone().sub(controls.target)
     : settings.layout === 'map' ? MAP_VIEW.clone() : new THREE.Vector3(-4, 4, 16);
   controls.target.copy(pos);
@@ -1248,6 +1251,13 @@ function renderActions(index) {
   if (!tagGroups.length) return;
   const head = el('div', 'act-section' + (ui.tagActionsOpen ? ' open' : ''), `Tags (${tagGroups.length})`);
   head.title = 'Show / hide tag actions';
+  head.tabIndex = 0;
+  head.onkeydown = ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      head.click();
+    }
+  };
   head.onclick = () => {
     setUi({ tagActionsOpen: !ui.tagActionsOpen });
     renderActions(index);
@@ -1360,6 +1370,13 @@ function renderChanges(c) {
     item.append(el('span', 'file-status st-' + f.status, f.status), name, dir, counts);
     item.title = `${f.path}\nClick to show the diff in the commit view`;
     item.onclick = () => openInCommitView(c, f.path);
+    item.tabIndex = 0;
+    item.onkeydown = ev => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        item.click();
+      }
+    };
     list.append(item);
   }
   if (c.parents.length > 1) infoEl.append(el('div', 'info-note', `Merge commit: changes shown against first parent ${c.parents[0].slice(0, 7)}`));
@@ -1460,7 +1477,17 @@ function hideMenu() {
   menuEl.classList.add('hidden');
   menuAnchor?.classList.remove('open');
   menuAnchor = null;
+  flyMenu = false;
 }
+
+menuEl.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = [...menuEl.querySelectorAll('.menu-item:not(:disabled)')];
+  if (!items.length) return;
+  const k = items.indexOf(document.activeElement);
+  items[(k + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+});
 
 // --- header: git toolbar and menus ---
 const tool = (name, extra) => vscode.postMessage({ type: 'gitTool', tool: name, hash: selectedHash ?? undefined, ...extra });
@@ -1579,6 +1606,11 @@ const zoomPlane = new THREE.Plane();
 const zoomPoint = new THREE.Vector3();
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
+  if (flyMode) {
+    flySpeed = Math.min(Math.max(flySpeed * (e.deltaY < 0 ? 1.25 : 0.8), 2), 400);
+    updateFlyHud();
+    return;
+  }
   const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
   const factor = Math.exp(delta * ZOOM_SPEED);
   setPointer(e);
@@ -1607,6 +1639,16 @@ let drag = null; // { index, plane, offset }
 const dragHit = new THREE.Vector3();
 
 canvas.addEventListener('pointerdown', e => {
+  if (flyMode) {
+    // the mouse is locked: a press grabs what's under the crosshair, moving then drags it, a plain click acts like Enter
+    e.stopImmediatePropagation();
+    if (document.pointerLockElement !== canvas) flyRelock();
+    else {
+      flyPress = { button: e.button, dragging: false };
+      if (e.button === 0) flyGrab();
+    }
+    return;
+  }
   downPos = { x: e.clientX, y: e.clientY, button: e.button };
   hideMenu();
   if (e.button !== 0) return;
@@ -1641,6 +1683,7 @@ canvas.addEventListener('pointerup', e => {
 
 // Coalesce pointer moves to at most one raycast per frame.
 canvas.addEventListener('dblclick', e => {
+  if (flyMode) return;
   const hit = pick(e);
   if (!hit) return;
   select(hit.index);
@@ -1698,8 +1741,10 @@ function handlePointerMove(e) {
 window.addEventListener('keydown', e => {
   const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
   if (e.key === 'Escape') {
+    const menuOpen = !menuEl.classList.contains('hidden');
     hideMenu();
-    select(null);
+    if (!flyMode) select(null);
+    else if (!menuOpen) exitFly();
   } else if (typing || e.ctrlKey || e.metaKey || e.altKey) {
     return;
   } else if ((e.key === 'p' || e.key === 'P') && state && selectedHash) {
@@ -1707,7 +1752,254 @@ window.addEventListener('keydown', e => {
     if (idx !== undefined) togglePin(state.branchOf[idx]);
   } else if (e.key === 'n' || e.key === 'N') setUi({ sideHidden: !ui.sideHidden });
   else if (e.key === 'h' || e.key === 'H') setUi({ uiHidden: !ui.uiHidden });
+  else if (e.key === 'f' || e.key === 'F') toggleFly();
+  else if (e.key === '1') focusPanel('itemPanel');
+  else if (e.key === '2') focusPanel('actionsPanel');
   else if (e.key === 'Home') resetView();
+});
+
+// --- keyboard navigation mode: WASD flies, arrows / mouse look, a crosshair picks like the mouse ---
+const FLY_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight']);
+const FLY_ROLL_RATE = 1.0; // rad/s for A/D
+const FLY_LOOK_RATE = 0.8; // rad/s for the arrow keys
+const FLY_MOUSE_SENS = 0.0022;
+const FLY_FINE = 0.25; // Alt multiplier for arrows and mouse
+const FLY_FAST = 4;
+const flyKeys = new Set();
+let flySpeed = 30; // units per second
+let flyYaw = 0; // pending rotation from the mouse, applied next frame
+let flyPitch = 0;
+let flyPress = null; // { button, dragging } while a mouse button is held
+const flyHeld = new THREE.Vector3(); // grabbed commit position in camera space, so it stays where the crosshair holds it
+let flyNoLock = false;
+let flyOrbitDist = 55; // keeps the orbit target ahead of the camera so lod, grid and paging keep working
+let flyHoverDirty = false;
+let lastSpace = 0;
+const SPACE_DOUBLE_MS = 350;
+const crosshairEl = document.getElementById('crosshair');
+const flyBtn = document.getElementById('flyBtn');
+const FOCUSABLE = 'button:not(:disabled), [tabindex="0"]';
+
+function updateFlyHud() {
+  document.getElementById('flySpeed').textContent = Math.round(flySpeed);
+}
+
+function flyCenter() {
+  const r = canvas.getBoundingClientRect();
+  return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, buttons: 0 };
+}
+
+function flyRelock() {
+  if (flyNoLock || flyMenu || document.pointerLockElement === canvas) return;
+  try {
+    canvas.requestPointerLock()?.catch?.(() => {});
+  } catch { /* needs a user gesture */ }
+}
+
+function flyGrab() {
+  const c = flyCenter();
+  const hit = pick(c);
+  if (!hit) return;
+  const pos = state.positions[hit.index];
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), pos);
+  if (!raycaster.ray.intersectPlane(plane, dragHit)) return;
+  startDrag(hit.index, plane, pos.clone().sub(dragHit));
+  camera.updateMatrixWorld();
+  flyHeld.copy(camera.worldToLocal(pos.clone()));
+}
+
+function enterFly() {
+  if (flyMode) return;
+  flyMode = true;
+  viewAnim = null;
+  drag = null;
+  hideMenu();
+  document.activeElement?.blur();
+  tooltipEl.classList.add('hidden');
+  flyYaw = flyPitch = 0;
+  flyOrbitDist = Math.max(camera.position.distanceTo(controls.target), 10);
+  controls.enabled = false;
+  document.body.classList.add('fly');
+  flyBtn.classList.add('active');
+  updateFlyHud();
+  flyHoverDirty = true;
+  flyRelock();
+}
+
+function exitFly() {
+  if (!flyMode) return;
+  flyMode = false;
+  flyMenu = false;
+  flyPress = null;
+  if (drag) {
+    drag = null;
+    startSim(0.3);
+  }
+  flyKeys.clear();
+  document.body.classList.remove('fly');
+  flyBtn.classList.remove('active');
+  crosshairEl.classList.remove('hit');
+  if (document.pointerLockElement) document.exitPointerLock();
+  camera.updateMatrixWorld();
+  camera.getWorldDirection(tmpVec);
+  // orbit around what the crosshair is on, otherwise a point straight ahead
+  const hit = state && pick(flyCenter());
+  const node = hit && state.positions[hit.index];
+  if (node && node.distanceTo(camera.position) > MIN_ORBIT) controls.target.copy(node);
+  else controls.target.copy(camera.position).addScaledVector(tmpVec, flyOrbitDist);
+  controls.enabled = true;
+  controls.update();
+  hoveredKey = -1;
+  invalidate();
+}
+
+function toggleFly() {
+  if (flyMode) exitFly();
+  else enterFly();
+}
+
+flyBtn.onclick = toggleFly;
+
+function flyAction(menu) {
+  const at = flyCenter();
+  const hit = pick(at);
+  if (!menu) {
+    select(hit ? hit.index : null);
+    return;
+  }
+  if (!hit) return;
+  select(hit.index);
+  // release the mouse so Esc closes the menu instead of leaving the mode; arrows + Enter drive it
+  flyMenu = true;
+  document.exitPointerLock();
+  showMenu(at, hit);
+  menuEl.querySelector('.menu-item:not(:disabled)')?.focus();
+}
+
+function stepFly(dt) {
+  if (!flyMode) return;
+  const down = c => (flyKeys.has(c) ? 1 : 0);
+  const roll = down('KeyA') - down('KeyD');
+  const turn = down('ArrowLeft') - down('ArrowRight');
+  const lookY = down('ArrowUp') - down('ArrowDown');
+  const move = down('KeyW') - down('KeyS');
+  const fine = flyKeys.has('AltLeft') || flyKeys.has('AltRight') ? FLY_FINE : 1;
+  const yaw = turn * FLY_LOOK_RATE * fine * dt + flyYaw;
+  const pitch = lookY * FLY_LOOK_RATE * fine * dt + flyPitch;
+  const rollBy = roll * FLY_ROLL_RATE * dt;
+  flyYaw = flyPitch = 0;
+  if (yaw || pitch || rollBy) {
+    // rotate about the camera's own axes, so there is no up or down limit
+    camera.rotateY(yaw);
+    camera.rotateX(pitch);
+    camera.rotateZ(rollBy);
+    camera.quaternion.normalize();
+    flyHoverDirty = true;
+  }
+  camera.getWorldDirection(tmpVec);
+  if (move) {
+    const fast = flyKeys.has('ShiftLeft') || flyKeys.has('ShiftRight') ? FLY_FAST : 1;
+    camera.position.addScaledVector(tmpVec, move * flySpeed * fast * dt);
+    flyHoverDirty = true;
+  }
+  controls.target.copy(camera.position).addScaledVector(tmpVec, flyOrbitDist);
+  if (drag && flyPress) {
+    // the grabbed commit stays where it was in the view, so it follows the crosshair as the ship turns and moves
+    camera.updateMatrixWorld();
+    const held = camera.localToWorld(flyHeld.clone()).sub(drag.start);
+    if (held.length() > 0.3) flyPress.dragging = true;
+    if (flyPress.dragging) dragNodes(held);
+  }
+  if (flyHoverDirty) {
+    flyHoverDirty = false;
+    camera.updateMatrixWorld();
+    handlePointerMove(flyCenter());
+    crosshairEl.classList.toggle('hit', hoveredIndex >= 0);
+    invalidate();
+  }
+}
+
+document.addEventListener('mousemove', e => {
+  if (!flyMode || document.pointerLockElement !== canvas) return;
+  const fine = e.altKey ? FLY_FINE : 1;
+  flyYaw -= e.movementX * FLY_MOUSE_SENS * fine;
+  flyPitch -= e.movementY * FLY_MOUSE_SENS * fine;
+  flyHoverDirty = true;
+});
+canvas.addEventListener('pointerup', () => {
+  if (!flyMode || !flyPress) return;
+  const { button, dragging } = flyPress;
+  flyPress = null;
+  if (drag) {
+    drag = null;
+    startSim(0.3);
+  }
+  if (!dragging) flyAction(button === 2);
+});
+canvas.addEventListener('pointercancel', () => {
+  flyPress = null;
+  if (drag) {
+    drag = null;
+    startSim(0.3);
+  }
+});
+document.addEventListener('pointerlockchange', () => {
+  // losing the lock without us asking (Esc, alt-tab) leaves the mode
+  if (flyMode && !flyMenu && document.pointerLockElement !== canvas) exitFly();
+});
+document.addEventListener('pointerlockerror', () => { flyNoLock = true; });
+
+window.addEventListener('keydown', e => {
+  if (!flyMode || e.metaKey || e.ctrlKey) return;
+  // once Tab has moved focus into the UI, normal keyboard handling applies
+  if (e.target instanceof Element && e.target.closest('input, select, textarea, #sidebar, #menu, #header, #finder')) return;
+  // with Alt held only the look keys count, so Alt+letter menu shortcuts stay with VS Code
+  if (e.altKey && !/^(Arrow|Alt|Shift)/.test(e.code)) return;
+  if (FLY_KEYS.has(e.code)) {
+    e.preventDefault();
+    flyKeys.add(e.code);
+    flyRelock();
+  } else if (e.code === 'Space') {
+    e.preventDefault();
+    if (e.repeat) return;
+    // a second tap within the window is the right-click
+    const now = performance.now();
+    const double = now - lastSpace < SPACE_DOUBLE_MS;
+    lastSpace = double ? 0 : now;
+    flyAction(double);
+  }
+});
+window.addEventListener('keyup', e => {
+  flyKeys.delete(e.code);
+  // a lone Alt press would otherwise focus the window menu
+  if (flyMode && e.code.startsWith('Alt')) e.preventDefault();
+});
+window.addEventListener('blur', () => flyKeys.clear());
+
+// --- focus the sidebar panels from the keyboard ---
+function focusPanel(id) {
+  exitFly();
+  if (ui.sideHidden || ui.uiHidden || ui.collapsed.includes(id)) {
+    setUi({ sideHidden: false, uiHidden: false, collapsed: ui.collapsed.filter(x => x !== id) });
+  }
+  const body = document.querySelector(`#${id} .panel-body`);
+  (body.querySelector(FOCUSABLE) ?? body).focus();
+}
+
+document.getElementById('sidebar').addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    document.activeElement?.blur();
+    return;
+  }
+  const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  const body = e.target instanceof Element && e.target.closest('.panel-body');
+  if (!dir || !body) return;
+  e.preventDefault();
+  const items = [...body.querySelectorAll(FOCUSABLE)];
+  if (!items.length) return;
+  const k = items.indexOf(e.target);
+  items[k < 0 ? 0 : Math.min(Math.max(k + dir, 0), items.length - 1)].focus();
 });
 
 window.addEventListener('resize', () => {
@@ -2085,6 +2377,7 @@ window.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
   if ((e.key === 'f' && (e.ctrlKey || e.metaKey)) || e.key === '/') {
     e.preventDefault();
+    exitFly();
     searchInput.focus();
     searchInput.select();
   }
@@ -2143,18 +2436,22 @@ window.addEventListener('message', ({ data }) => {
   }
 });
 
+let lastFrame = performance.now();
 function animate() {
   requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
   if (pendingMove) {
-    handlePointerMove(pendingMove);
+    if (!flyMode) handlePointerMove(pendingMove);
     pendingMove = null;
   }
   stepViewAnim();
-  controls.update();
+  stepFly(dt);
+  if (!flyMode) controls.update();
   if (state) {
     if (simAlpha > 0) simTick();
     const base = state.selMarker.userData.base ?? 1;
-    const now = performance.now();
     const target = now < highlightUntil ? base * (1 + 0.6 * Math.abs(Math.sin(now / 150))) : base;
     if (state.selMarker.scale.x !== target) {
       state.selMarker.scale.setScalar(target);

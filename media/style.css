@@ -149,6 +149,65 @@ body.ui-hidden #eyeBtn:hover { opacity: 1; }
 body.ui-hidden #eyeBtn .slash { display: inline; }
 body.ui-hidden :is(#header, #finder, #sideToggle, #sidebar, #pins, #legend, #hint, #gizmo) { display: none !important; }
 
+.icon-btn.active { color: var(--b-text); background: var(--b-accent); }
+#sidebar :is(button, [tabindex='0']):focus-visible { outline: 1px solid var(--b-accent); outline-offset: -1px; }
+#sidebar .panel-body:focus { outline: none; }
+
+/* keyboard navigation mode */
+#crosshair, #flyHud { display: none; position: absolute; pointer-events: none; }
+body.fly #crosshair { display: block; }
+body.fly #flyHud { display: flex; }
+#crosshair {
+  left: 50%;
+  top: 50%;
+  z-index: 15;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transition: transform 0.08s, border-color 0.08s;
+}
+#crosshair::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+}
+#crosshair.hit { transform: scale(1.35); border-color: #ffc400; }
+#crosshair.hit::after { background: #ffc400; }
+#flyHud {
+  left: 50%;
+  bottom: 32px;
+  z-index: 15;
+  transform: translateX(-50%);
+  align-items: center;
+  gap: 14px;
+  padding: 5px 12px;
+  white-space: nowrap;
+  color: var(--b-text-dim);
+  font-size: 11px;
+  background: rgba(40, 40, 40, 0.92);
+  border: 1px solid #262626;
+  border-radius: 6px;
+}
+#flyHud b { color: var(--b-text); }
+#flyHud kbd {
+  margin-right: 3px;
+  padding: 0 4px;
+  color: var(--b-text);
+  font: inherit;
+  background: var(--b-widget);
+  border-radius: 3px;
+}
+
 .btn-group { display: flex; }
 .btn-group button { border-radius: 0; margin-right: 1px; }
 .btn-group button:first-child { border-radius: 4px 0 0 4px; }

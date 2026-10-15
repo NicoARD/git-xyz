@@ -746,6 +746,7 @@ function getHtml(webview, extUri) {
   <button id="stashBtn" title="Stash">Stash<span id="stashCount" class="count"></span> &#9662;</button>
   </div>
   <div class="hdr-right">
+  <button class="icon-btn" id="flyBtn" title="Keyboard navigation mode (F): WASD to fly, arrows and mouse to look, hold click on a commit to carry it with the crosshair, Space to select"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="M8 0.8v3M8 12.2v3M0.8 8h3M12.2 8h3"/></svg></button>
   <button class="icon-btn" data-tool="explorer" title="Open the repository folder"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1.5 3.5h4.5l1.5 1.5h7v8h-13z"/></svg></button>
   <button class="icon-btn" data-tool="terminal" title="Open a terminal in the repository"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg></button>
   <div id="view">
@@ -799,20 +800,22 @@ function getHtml(webview, extUri) {
 <div id="sidebar">
   <div id="sideResize" title="Drag to resize"></div>
   <div class="panel" id="itemPanel">
-    <div class="panel-head">Item</div>
-    <div id="info" class="panel-body"></div>
+    <div class="panel-head" title="Focus with 1">Item</div>
+    <div id="info" class="panel-body" tabindex="-1"></div>
   </div>
   <div id="sideSplit" title="Drag to resize"></div>
   <div class="panel" id="actionsPanel">
-    <div class="panel-head">Actions</div>
-    <div id="actions" class="panel-body"></div>
+    <div class="panel-head" title="Focus with 2">Actions</div>
+    <div id="actions" class="panel-body" tabindex="-1"></div>
   </div>
 </div>
 <button id="eyeBtn" class="icon-btn" title="Hide / show the interface (H)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.6-4.8 7-4.8S15 8 15 8s-2.6 4.8-7 4.8S1 8 1 8z"/><circle cx="8" cy="8" r="2.1" fill="currentColor"/><path class="slash" d="M2.5 13.5l11-11"/></svg></button>
 <div id="legend" class="hidden"></div>
+<div id="crosshair"></div>
+<div id="flyHud"><b>Keyboard navigation</b><span><kbd>W</kbd><kbd>S</kbd> Move</span><span><kbd>A</kbd><kbd>D</kbd> Roll</span><span><kbd>↑</kbd><kbd>↓</kbd> Pitch</span><span><kbd>←</kbd><kbd>→</kbd> Turn</span><span><kbd>Mouse</kbd> Look</span><span><kbd>Hold click</kbd> Carry commit</span><span><kbd>Shift</kbd> Fast</span><span><kbd>Alt</kbd> Fine</span><span><kbd>Wheel</kbd> Speed <span id="flySpeed"></span></span><span><kbd>Space</kbd> Select</span><span><kbd>Space ×2</kbd> Menu</span><span><kbd>Esc</kbd> Exit</span></div>
 <canvas id="gizmo" title="Click an axis to view from that side"></canvas>
 <div id="pins" class="hidden"></div>
-<div id="hint"><span><b>Scroll</b> Zoom</span><span><b>LMB drag</b> Pan / move node</span><span><b>RMB drag</b> Tilt &amp; orbit</span><span><b>Dbl-click</b> Commit view</span><span><b>RMB</b> Actions</span><span><b>P</b> Pin branch</span><span><b>N</b> Sidebar</span><span><b>H</b> Hide UI</span><span><b>Esc</b> Deselect</span></div>
+<div id="hint"><span><b>Scroll</b> Zoom</span><span><b>LMB drag</b> Pan / move node</span><span><b>RMB drag</b> Tilt &amp; orbit</span><span><b>Dbl-click</b> Commit view</span><span><b>RMB</b> Actions</span><span><b>P</b> Pin branch</span><span><b>N</b> Sidebar</span><span><b>1</b>/<b>2</b> Focus Item/Actions</span><span><b>F</b> Keyboard Nav</span><span><b>H</b> Hide UI</span><span><b>Esc</b> Deselect</span></div>
 <div id="menu" class="hidden"></div>
 <div id="tooltip" class="hidden"></div>
 <script type="module" nonce="${nonce}" src="${uri('media', 'main.js')}"></script>
