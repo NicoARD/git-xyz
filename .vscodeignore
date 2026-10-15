@@ -4,6 +4,9 @@
 build.ps1
 *.vsix
 node_modules/three/src/**
+node_modules/three/build/three.cjs
+node_modules/three/build/three.module.min.js
+node_modules/three/build/three.webgpu*
 node_modules/three/examples/fonts/**
 node_modules/three/examples/models/**
 node_modules/three/examples/textures/**

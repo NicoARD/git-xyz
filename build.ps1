@@ -7,7 +7,8 @@ Set-Location $PSScriptRoot
 npm install --omit=dev
 if ($LASTEXITCODE) { throw 'npm install failed' }
 
-npx --yes @vscode/vsce package --allow-missing-repository --skip-license
+# pinned: newer vsce needs require(esm), which Node < 22.12 lacks
+npx --yes @vscode/vsce@3.2.1 package --allow-missing-repository --skip-license
 if ($LASTEXITCODE) { throw 'vsce package failed' }
 
 $vsix = Get-ChildItem -Filter *.vsix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
