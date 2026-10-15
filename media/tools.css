@@ -1,0 +1,78 @@
+/* Commit and stash windows; builds on commit.css (buttons, tree, diff). */
+#layout { flex: 1; display: flex; min-height: 0; }
+#left { display: flex; flex-direction: column; width: 360px; min-width: 180px; flex-shrink: 0; }
+#right { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.box { display: flex; flex-direction: column; min-height: 0; }
+#unstagedBox { height: 55%; flex-shrink: 0; }
+#stagedBox { flex: 1; }
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 12px;
+}
+.bar .title { font-weight: 600; white-space: nowrap; }
+.count { color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
+.grow { flex: 1; }
+.stage-bar { gap: 4px; padding: 2px 6px; border-top: 1px solid var(--vscode-panel-border); }
+.stage-bar button { padding: 2px 8px; }
+button.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+button.primary:hover { background: var(--vscode-button-hoverBackground); }
+button:disabled { opacity: 0.5; cursor: default; }
+button:disabled:hover { background: var(--vscode-button-secondaryBackground); }
+button.primary:disabled:hover { background: var(--vscode-button-background); }
+.check { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; user-select: none; }
+.dim { font-size: 11px; }
+select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 4px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 2px;
+  outline: none;
+}
+textarea {
+  flex: 1;
+  min-height: 40px;
+  resize: none;
+  padding: 6px 8px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size, 12px);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  outline: none;
+}
+textarea:focus { border-color: var(--vscode-focusBorder); }
+textarea[readonly] { opacity: 0.8; }
+
+/* commit window */
+#commitArea { display: flex; flex-direction: column; gap: 6px; height: 170px; flex-shrink: 0; padding: 6px 8px 8px; }
+#commitButtons { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#statusBar {
+  display: flex;
+  gap: 18px;
+  padding: 3px 10px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  border-top: 1px solid var(--vscode-panel-border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* stash window */
+#left > .tree { flex: 1; }
+#stashArea { display: flex; flex-direction: column; gap: 6px; height: 230px; flex-shrink: 0; padding: 8px; }
+#stashArea textarea { background: var(--vscode-inputValidation-warningBackground, var(--vscode-input-background)); }
+#stashArea textarea[readonly] { background: var(--vscode-input-background); }
+#stashArea .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#stashArea .buttons button { padding: 5px 8px; }

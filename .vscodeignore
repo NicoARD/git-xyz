@@ -1,0 +1,9 @@
+.vscode/**
+.git/**
+.gitignore
+build.ps1
+*.vsix
+node_modules/three/src/**
+node_modules/three/examples/fonts/**
+node_modules/three/examples/models/**
+node_modules/three/examples/textures/**

@@ -1,0 +1,50 @@
+{
+  "name": "gitxyz",
+  "displayName": "GitXYZ - 3D Git Graph",
+  "description": "Proof of concept 3D git commit graph",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "SCM Providers"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitxyz.open",
+        "title": "Open 3D Graph",
+        "category": "GitXYZ",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "gitxyz.refresh",
+        "title": "Refresh",
+        "category": "GitXYZ"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gitxyz.refresh",
+        "key": "f5",
+        "when": "activeWebviewPanelId =~ /^gitxyz/"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitxyz.open",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  }
+}
